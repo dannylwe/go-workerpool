@@ -1,58 +1,39 @@
 package main
 
 import (
-	"fmt"
-	"sync"
-	"time"
+	"net/http"
+	log "github.com/sirupsen/logrus"
+	
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type Job struct {
-	Id int
-}
+var (
+	cpuTemp = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "cpu_temperature_celsius",
+		Help: "Current temperature of the CPU.",
+	})
+	hdFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hd_errors_total",
+			Help: "Number of hard-disk errors.",
+		},
+		[]string{"device"},
+	)
+)
 
-type JobResult struct {
-	Output string
-}
-
-func worker(id int, wg *sync.WaitGroup, jobChannel <-chan Job) {
-	defer wg.Done()
-	for job := range jobChannel {
-		doSomething(id, job)
-	}
-}
-
-func doSomething(workerID int, job Job) JobResult {
-	fmt.Printf("Worker #%d Running job #%d\n", workerID, job.Id)
-	time.Sleep(time.Second * 1)
-	return JobResult{Output: "success"}
+func init() {
+	// Metrics have to be registered to be exposed:
+	prometheus.MustRegister(cpuTemp)
+	prometheus.MustRegister(hdFailures)
 }
 
 func main() {
-	start := time.Now()
-	var jobs []Job
+	cpuTemp.Set(65.3)
+	hdFailures.With(prometheus.Labels{"device": "/dev/sda"}).Inc()
 
-	for i := 0; i < 100; i++ {
-		jobs = append(jobs, Job{Id: i})
-	}
-
-	const NumberOfWorkers = 10
-	var (
-		wg         sync.WaitGroup
-		jobChannel = make(chan Job)
-	)
-	wg.Add(NumberOfWorkers)
-
-	// start workers
-	for j := 0; j < NumberOfWorkers; j++ {
-		go worker(j, &wg, jobChannel)
-	}
-
-	// send jobs to worker
-	for _, job := range jobs {
-		jobChannel <- job
-	}
-
-	close(jobChannel)
-	wg.Wait()
-	fmt.Printf("Took %s\n", time.Since(start))
+	// The Handler function provides a default handler to expose metrics
+	// via an HTTP server. "/metrics" is the usual endpoint for that.
+	http.Handle("/metrics", promhttp.Handler())
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
