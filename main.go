@@ -2,8 +2,13 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"net/http"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Job struct {
@@ -12,6 +17,18 @@ type Job struct {
 
 type JobResult struct {
 	Output string
+}
+
+var (
+	workerPool = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "Worker_pool",
+		Help: "Get the Total of the current active workers",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(workerPool)
+	workerPool.Set(0)
 }
 
 func worker(id int, wg *sync.WaitGroup, jobChannel <-chan Job, resutlChannel chan JobResult) {
@@ -24,6 +41,7 @@ func worker(id int, wg *sync.WaitGroup, jobChannel <-chan Job, resutlChannel cha
 func doSomething(workerID int, job Job) JobResult {
 	fmt.Printf("Worker #%d Running job #%d\n", workerID, job.Id)
 	time.Sleep(time.Millisecond * 500)
+	workerPool.Inc()
 	return JobResult{Output: "success"}
 }
 
@@ -38,14 +56,15 @@ func main() {
 
 	const NumberOfWorkers = 10
 	var (
-		wg         sync.WaitGroup
-		jobChannel = make(chan Job)
+		wg               sync.WaitGroup
+		jobChannel       = make(chan Job)
 		jobResultChannel = make(chan JobResult, len(jobs))
 	)
 	wg.Add(NumberOfWorkers)
 
 	// start workers
 	for j := 0; j < NumberOfWorkers; j++ {
+
 		go worker(j, &wg, jobChannel, jobResultChannel)
 	}
 
@@ -59,9 +78,15 @@ func main() {
 	close(jobResultChannel)
 
 	var jobResults []JobResult
+
 	for result := range jobResultChannel {
+		// workerPool.Dec()
 		jobResults = append(jobResults, result)
 	}
 	fmt.Println(jobResults)
 	fmt.Printf("Took %s\n", time.Since(start))
+
+	http.Handle("/metrics", promhttp.Handler())
+	log.Printf("writing on PORT 8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
